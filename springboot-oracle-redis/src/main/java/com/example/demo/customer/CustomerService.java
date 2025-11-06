@@ -1,5 +1,6 @@
 package com.example.demo.customer;
 
+import org.springframework.cache.annotation.CacheConfig;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.CachePut;
 import org.springframework.cache.annotation.Cacheable;
@@ -9,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 
 @Service
+@CacheConfig(cacheNames = "customers")
 @Transactional(readOnly = true)
 public class CustomerService {
 
@@ -22,43 +24,50 @@ public class CustomerService {
         return repository.findAll();
     }
 
-    @Cacheable(value = "customers", key = "#id")
+    @Cacheable(key = "#id")
     public Customer findById(Long id) {
-        return repository.findById(id)
-                .orElseThrow(() -> new CustomerNotFoundException(id));
+        return requireCustomer(id);
     }
 
     @Transactional
-    @CachePut(value = "customers", key = "#result.id")
+    @CachePut(key = "#result.id")
     public Customer create(CustomerRequest request) {
-        repository.findByEmail(request.getEmail()).ifPresent(existing -> {
-            throw new DuplicateEmailException(existing.getEmail());
-        });
-        Customer customer = new Customer(request.getName(), request.getEmail());
+        ensureEmailIsUnique(request.email(), null);
+        Customer customer = new Customer(request.name(), request.email());
         return repository.save(customer);
     }
 
     @Transactional
-    @CachePut(value = "customers", key = "#id")
+    @CachePut(key = "#id")
     public Customer update(Long id, CustomerRequest request) {
-        Customer existing = repository.findById(id)
-                .orElseThrow(() -> new CustomerNotFoundException(id));
-        if (!existing.getEmail().equalsIgnoreCase(request.getEmail())) {
-            repository.findByEmail(request.getEmail()).ifPresent(other -> {
-                throw new DuplicateEmailException(other.getEmail());
-            });
+        Customer existing = requireCustomer(id);
+        if (!existing.getEmail().equalsIgnoreCase(request.email())) {
+            ensureEmailIsUnique(request.email(), id);
         }
-        existing.setName(request.getName());
-        existing.setEmail(request.getEmail());
+        existing.setName(request.name());
+        existing.setEmail(request.email());
         return repository.save(existing);
     }
 
     @Transactional
-    @CacheEvict(value = "customers", key = "#id")
+    @CacheEvict(key = "#id")
     public void delete(Long id) {
         if (!repository.existsById(id)) {
             throw new CustomerNotFoundException(id);
         }
         repository.deleteById(id);
+    }
+
+    private Customer requireCustomer(Long id) {
+        return repository.findById(id)
+                .orElseThrow(() -> new CustomerNotFoundException(id));
+    }
+
+    private void ensureEmailIsUnique(String email, Long currentId) {
+        repository.findByEmail(email).ifPresent(existing -> {
+            if (currentId == null || !existing.getId().equals(currentId)) {
+                throw new DuplicateEmailException(email);
+            }
+        });
     }
 }
